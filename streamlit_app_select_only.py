@@ -1,22 +1,19 @@
 """
 Snowflake Streamlit App - Construction Defect Analysis
-Version with file upload support using temporary stage
+Deploy this file directly in Snowflake using CREATE STREAMLIT command
 """
 
 import streamlit as st
 from snowflake.snowpark.context import get_active_session
+from snowflake.snowpark.files import SnowflakeFile
 import pandas as pd
 import json
 from datetime import datetime
 from PIL import Image
 import io
-import base64
-import tempfile
-import os
 
 # Configuration
 SNOWFLAKE_STAGE_NAME = "input_stage"
-TEMP_STAGE_NAME = "temp_upload_stage"
 SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
 MAX_SIZE_MB_GENERAL = 10
 MAX_SIZE_MB_CLAUDE = 3.75
@@ -24,7 +21,7 @@ MAX_RESOLUTION_CLAUDE = 8000
 
 CLAUDE_MODELS = [
     "claude-3.5-sonnet",
-    "claude-3.7-sonnet",
+    "claude-3.7-sonnet", 
     "claude-4-sonnet",
     "claude-4-opus"
 ]
@@ -40,138 +37,27 @@ AVAILABLE_MODELS = {
 DEFAULT_PROMPT = """Describe the key characteristics of this wall as seen in this image {0}, noting this is part of a building. Keep descriptions concise and focus on structural defects. Respond in JSON with fields: material, colour, distinguishing_features, is_cracked, is_defective, defect_severity, defects, repairs_required, estimated_time_repairs_required, confidence_level_on_material, estimated_cost_of_repairs"""
 
 
-def validate_image(uploaded_file, model_name):
-    """Validate image format, size, and resolution"""
-    # Check format
-    file_ext = uploaded_file.name.split('.')[-1].lower()
-    if f'.{file_ext}' not in SUPPORTED_FORMATS:
-        return False, f"❌ Unsupported format. Supported: {', '.join(SUPPORTED_FORMATS)}"
-
-    # Check size
-    file_size_mb = uploaded_file.size / (1024 * 1024)
-    is_claude = model_name in CLAUDE_MODELS
-    max_size = MAX_SIZE_MB_CLAUDE if is_claude else MAX_SIZE_MB_GENERAL
-
-    if file_size_mb > max_size:
-        return False, f"❌ File too large ({file_size_mb:.2f} MB). Max: {max_size} MB for {model_name}"
-
-    # Check resolution for Claude models
-    if is_claude:
-        try:
-            image = Image.open(uploaded_file)
-            width, height = image.size
-            if width > MAX_RESOLUTION_CLAUDE or height > MAX_RESOLUTION_CLAUDE:
-                return False, f"❌ Resolution {width}x{height} exceeds Claude limit of {MAX_RESOLUTION_CLAUDE}x{MAX_RESOLUTION_CLAUDE}"
-            uploaded_file.seek(0)  # Reset file pointer
-        except Exception as e:
-            return False, f"❌ Could not read image: {str(e)}"
-
-    return True, "✅ Validation passed"
-
-
-def upload_to_stage_workaround(session, uploaded_file, stage_name):
+def analyze_with_snowflake(session, stage_name: str, file_path: str, prompt: str, model: str):
     """
-    Upload file to stage using workaround method:
-    1. Create temp table with binary data
-    2. Use COPY INTO to write to stage
+    Analyze image using Snowflake AI_COMPLETE with PARSE_JSON wrapper
+    Uses CTE structure to extract file metadata and parse AI response
     """
     try:
-        # Read file bytes
-        file_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
-
-        # Encode to base64
-        file_b64 = base64.b64encode(file_bytes).decode('utf-8')
-
-        # Generate unique filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"upload_{timestamp}_{uploaded_file.name}"
-
-        # Create temporary table with file data
-        temp_table = f"temp_upload_{timestamp}"
-
-        # Method: Use Snowflake internal stage with SQL
-        session.sql(f"""
-            CREATE TEMPORARY TABLE {temp_table} (
-                file_name STRING,
-                file_content STRING
-            )
-        """).collect()
-
-        # Insert data
-        session.sql(f"""
-            INSERT INTO {temp_table}
-            VALUES ('{filename}', '{file_b64}')
-        """).collect()
-
-        # Use COPY INTO to write binary data to stage
-        # This is a workaround - we'll actually just use the base64 data directly
-
-        return True, filename, file_bytes
-
-    except Exception as e:
-        return False, None, str(e)
-
-
-def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
-    """
-    Analyze uploaded image directly using base64 encoding
-    Workaround: Upload to temp stage then analyze
-    """
-    try:
-        # Try to upload file bytes to a stage using Snowpark DataFrame
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        temp_filename = f"temp_{timestamp}_{filename}"
-
-        # Write to temp file in container
-        temp_dir = "/tmp"  # Snowflake containers have /tmp
-        temp_path = os.path.join(temp_dir, temp_filename)
-
-        with open(temp_path, 'wb') as f:
-            f.write(file_bytes)
-
-        # Try to upload using Snowpark
-        try:
-            # Ensure temp stage exists
-            session.sql(f"""
-                CREATE STAGE IF NOT EXISTS {TEMP_STAGE_NAME}
-                DIRECTORY = (ENABLE = TRUE)
-            """).collect()
-
-            # Upload file
-            put_result = session.file.put(
-                temp_path,
-                f"@{TEMP_STAGE_NAME}",
-                auto_compress=False,
-                overwrite=True
-            )
-
-            # Clean up temp file
-            os.remove(temp_path)
-
-            # Refresh stage
-            session.sql(f"ALTER STAGE {TEMP_STAGE_NAME} REFRESH").collect()
-
-            # Now analyze using the uploaded file
-            stage_file_path = temp_filename
-
-        except Exception as upload_err:
-            # If upload fails, try direct analysis with base64
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise Exception(f"Upload failed: {str(upload_err)}")
-
-        # Escape single quotes in prompt
+        # Escape single quotes
         escaped_prompt = prompt.replace("'", "''")
-
-        # Analyze using AI_COMPLETE
+        escaped_file_path = file_path.replace("'", "''")
+        stage_ref = f'@{stage_name}'
+        
+        # CTE structure matching SQL script logic with PARSE_JSON
         query = f"""
         WITH input_pics AS (
             SELECT
-                TO_FILE('@{TEMP_STAGE_NAME}', '{stage_file_path}') AS img,
-                '{filename}' AS container_relpath,
-                {len(file_bytes)} AS file_size_bytes,
-                CURRENT_TIMESTAMP() AS last_modified
+                TO_FILE('{stage_ref}', '{escaped_file_path}') AS img,
+                d.RELATIVE_PATH AS container_relpath,
+                d.SIZE AS file_size_bytes,
+                TO_TIMESTAMP_NTZ(d.LAST_MODIFIED) AS last_modified
+            FROM DIRECTORY('{stage_ref}') d
+            WHERE d.RELATIVE_PATH = '{escaped_file_path}'
         ),
         ai_analysis AS (
             SELECT
@@ -193,9 +79,9 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
             result_json
         FROM ai_analysis;
         """
-
+        
         result = session.sql(query).collect()
-
+        
         if result and len(result) > 0:
             row = result[0]
             return True, {
@@ -208,7 +94,7 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
             }
         else:
             return False, "❌ No result returned from Snowflake"
-
+            
     except Exception as e:
         return False, f"❌ Analysis error: {str(e)}"
 
@@ -219,21 +105,21 @@ def main():
         page_icon="🏗️",
         layout="wide"
     )
-
+    
     st.title("🏗️ Construction Defect Analysis - AI Image Processing")
     st.markdown("Upload construction site images for AI-powered defect detection using Snowflake Cortex")
-
+    
     # Get Snowflake session
     session = get_active_session()
-
+    
     # Sidebar - Configuration
     with st.sidebar:
         st.header("⚙️ Configuration")
-
+        
         # Model selection by category
         model_category = st.selectbox("Model Provider", list(AVAILABLE_MODELS.keys()))
         model = st.selectbox("Select Model", AVAILABLE_MODELS[model_category])
-
+        
         st.markdown("---")
         st.subheader("📋 Analysis Prompt")
         prompt = st.text_area(
@@ -242,7 +128,7 @@ def main():
             height=200,
             help="Use {0} as placeholder for the image"
         )
-
+        
         st.markdown("---")
         st.info(f"""
         **Limits:**
@@ -250,79 +136,94 @@ def main():
         - Formats: {', '.join(SUPPORTED_FORMATS)}
         {'- Max resolution: 8000x8000 (Claude)' if model in CLAUDE_MODELS else ''}
         """)
-
+    
     # Main content
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("📤 Upload Image")
-        uploaded_file = st.file_uploader(
-            "Choose an image",
-            type=['jpg', 'jpeg', 'png', 'gif', 'webp'],
-            help="Upload a construction site image for defect analysis"
-        )
+        st.subheader("📂 Select Image from Stage")
 
-        if uploaded_file:
-            st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
+        # Load available images from stage
+        selected_file = None
+        try:
+            files_query = f"""
+            SELECT
+                RELATIVE_PATH,
+                SIZE,
+                LAST_MODIFIED
+            FROM DIRECTORY(@{SNOWFLAKE_STAGE_NAME})
+            WHERE RELATIVE_PATH LIKE '%.jpg'
+               OR RELATIVE_PATH LIKE '%.jpeg'
+               OR RELATIVE_PATH LIKE '%.png'
+               OR RELATIVE_PATH LIKE '%.gif'
+               OR RELATIVE_PATH LIKE '%.webp'
+            ORDER BY LAST_MODIFIED DESC
+            LIMIT 100
+            """
+            files_df = session.sql(files_query).to_pandas()
 
-            # Display image info
-            file_size_mb = uploaded_file.size / (1024 * 1024)
-            image = Image.open(uploaded_file)
-            width, height = image.size
-            uploaded_file.seek(0)
-            st.info(f"📊 **Size:** {file_size_mb:.2f} MB | **Resolution:** {width}x{height}px")
+            if len(files_df) > 0:
+                # Create a selectbox with file names
+                selected_file = st.selectbox(
+                    "Choose an image from stage",
+                    options=files_df['RELATIVE_PATH'].tolist(),
+                    help="Select an image that has been uploaded to the Snowflake stage"
+                )
+
+                if selected_file:
+                    # Display file info
+                    file_info = files_df[files_df['RELATIVE_PATH'] == selected_file].iloc[0]
+                    file_size_mb = file_info['SIZE'] / (1024 * 1024)
+
+                    st.info(f"""
+                    📊 **File:** {selected_file}
+                    📏 **Size:** {file_size_mb:.2f} MB
+                    🕒 **Modified:** {file_info['LAST_MODIFIED']}
+                    """)
+
+                    st.success(f"✅ Selected: `{selected_file}`")
+            else:
+                st.warning("⚠️ No images found in stage. Please upload images to the stage first.")
+                st.info("""
+                **To upload images to the stage:**
+                1. Use SnowSQL: `PUT file://local/path/image.jpg @input_stage/images`
+                2. Or upload via Snowsight UI to the stage
+                3. Then refresh this page
+                """)
+
+        except Exception as e:
+            st.error(f"❌ Error loading files from stage: {str(e)}")
 
     with col2:
         st.subheader("🔍 Analysis Results")
 
-        if uploaded_file:
+        if selected_file:
             if st.button("🚀 Analyze Image", type="primary", use_container_width=True):
-                # Validation
-                is_valid, validation_msg = validate_image(uploaded_file, model)
-
-                if not is_valid:
-                    st.error(validation_msg)
-                    st.stop()
-
                 # Progress tracking
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
-                # Step 1: Upload and analyze
-                status_text.text("⬆️ Uploading and analyzing...")
-                progress_bar.progress(25)
-
-                # Read file bytes
-                file_bytes = uploaded_file.read()
-                uploaded_file.seek(0)
-
-                # Analyze
+                # Step 1: Analyze with AI (file already in stage)
                 status_text.text("🤖 Analyzing with Snowflake AI...")
                 progress_bar.progress(50)
 
-                success, result = analyze_with_uploaded_file(
-                    session,
-                    file_bytes,
-                    uploaded_file.name,
-                    prompt,
-                    model
-                )
-
+                success, result = analyze_with_snowflake(session, SNOWFLAKE_STAGE_NAME, selected_file, prompt, model)
+                
                 if not success:
                     st.error(result)
                     st.stop()
-
+                
                 progress_bar.progress(100)
                 status_text.text("✅ Analysis complete!")
-
+                
                 # Display results
                 st.markdown("---")
                 st.markdown("### 📊 Analysis Output")
-
+                
                 if isinstance(result, dict):
                     ai_result = result.get('ai_result', {})
                     metadata = result.get('metadata', {})
-
+                    
                     # Display metadata
                     if metadata:
                         st.markdown("### 📁 File Metadata")
@@ -334,32 +235,32 @@ def main():
                             st.metric("File Size", f"{file_size_kb:.2f} KB")
                         with metadata_cols[2]:
                             st.metric("Last Modified", metadata.get('last_modified', 'N/A'))
-
+                    
                     # Display AI result
                     st.json(ai_result)
-
+                    
                     # Extract message content
                     if 'choices' in ai_result and len(ai_result['choices']) > 0:
                         message_content = ai_result['choices'][0].get('message', {}).get('content', '')
-
+                        
                         st.markdown("### 📝 AI Response")
                         st.markdown(message_content)
-
+                        
                         # Summary table
                         st.markdown("### 📋 Summary Table")
                         summary_data = {
                             "Model": [model],
                             "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                            "Image": [uploaded_file.name],
+                            "Image": [selected_file],
                             "Status": ["✅ Completed"]
                         }
-
+                        
                         # Add token usage if available
                         if 'usage' in ai_result:
                             summary_data["Total Tokens"] = [ai_result['usage'].get('total_tokens', 'N/A')]
                             summary_data["Prompt Tokens"] = [ai_result['usage'].get('prompt_tokens', 'N/A')]
                             summary_data["Completion Tokens"] = [ai_result['usage'].get('completion_tokens', 'N/A')]
-
+                        
                         df = pd.DataFrame(summary_data)
                         st.dataframe(df, use_container_width=True)
                     else:
