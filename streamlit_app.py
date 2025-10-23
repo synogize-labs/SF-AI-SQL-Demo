@@ -222,18 +222,42 @@ def main():
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     sanitized_name = sanitize_filename(uploaded_file.name)
                     file_path = f"images/{timestamp}_{sanitized_name}"
-                    
-                    # Upload to stage using PUT command
-                    # Write file temporarily
+
+                    # Read file bytes
                     file_bytes = uploaded_file.read()
                     uploaded_file.seek(0)
-                    
-                    # Use Snowflake PUT to upload
-                    session.sql(f"PUT 'file:///tmp/{sanitized_name}' @{SNOWFLAKE_STAGE_NAME}/{file_path} AUTO_COMPRESS=FALSE OVERWRITE=TRUE").collect()
-                    
-                    st.success(f"✅ Uploaded to stage: `{file_path}`")
-                    progress_bar.progress(66)
-                    
+
+                    # Write to temp location then upload using session.file.put()
+                    import tempfile
+                    import os
+
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{sanitized_name.split(".")[-1]}') as tmp_file:
+                        tmp_file.write(file_bytes)
+                        tmp_path = tmp_file.name
+
+                    try:
+                        # Use session.file.put() for Streamlit in Snowflake
+                        put_result = session.file.put(
+                            tmp_path,
+                            f"@{SNOWFLAKE_STAGE_NAME}/images",
+                            auto_compress=False,
+                            overwrite=True
+                        )
+
+                        # Clean up temp file
+                        os.unlink(tmp_path)
+
+                        # The uploaded file will have the original name
+                        file_path = f"images/{sanitized_name}"
+
+                        st.success(f"✅ Uploaded to stage: `{file_path}`")
+                        progress_bar.progress(66)
+
+                    except Exception as upload_err:
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                        raise upload_err
+
                 except Exception as e:
                     st.error(f"❌ Upload error: {str(e)}")
                     st.stop()
