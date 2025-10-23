@@ -37,7 +37,7 @@ AVAILABLE_MODELS = {
 }
 
 # Structured prompt for construction defect analysis
-DEFAULT_PROMPT = """Describe the key characteristics of this wall as seen in this image {0}, noting this is part of a building. Keep descriptions concise and focus on structural defects. Respond in JSON with fields: material (string), colour (string), distinguishing_features (string), is_cracked (boolean), is_defective (boolean), defect_severity (string: "low"/"medium"/"high"), defects (ARRAY of strings), repairs_required (ARRAY of strings), estimated_time_repairs_required (string), confidence_level_on_material (string), estimated_cost_of_repairs (string). IMPORTANT: defects and repairs_required MUST be arrays/lists, never a single string."""
+DEFAULT_PROMPT = """Describe the key characteristics of this wall as seen in this image {0}, noting this is part of a building. Keep descriptions concise and focus on structural defects. Respond in JSON with fields: material, colour, distinguishing_features, is_cracked, is_defective, defect_severity, defects, repairs_required, estimated_time_repairs_required, confidence_level_on_material, estimated_cost_of_repairs"""
 
 
 def validate_image(uploaded_file, model_name):
@@ -358,24 +358,6 @@ def main():
                         # This is the structured defect analysis response
                         st.markdown("### 📝 Defect Analysis Results")
 
-                        # Normalize defects and repairs to always be lists
-                        def ensure_list(value):
-                            """Convert value to list if it's not already"""
-                            if value is None:
-                                return []
-                            if isinstance(value, list):
-                                return value
-                            if isinstance(value, dict):
-                                # Handle dict with numeric keys like {0: "item1", 1: "item2"}
-                                return [v for k, v in sorted(value.items())]
-                            if isinstance(value, str):
-                                # Single string - wrap in list
-                                return [value]
-                            return []
-
-                        defects = ensure_list(ai_result.get('defects'))
-                        repairs = ensure_list(ai_result.get('repairs_required'))
-
                         # Display key findings in columns
                         result_cols = st.columns(3)
                         with result_cols[0]:
@@ -389,15 +371,15 @@ def main():
                             st.metric("Time Required", ai_result.get('estimated_time_repairs_required', 'N/A'))
 
                         # Defects list
-                        if defects:
+                        if 'defects' in ai_result and ai_result['defects']:
                             st.markdown("#### 🔍 Identified Defects")
-                            for defect in defects:
+                            for defect in ai_result['defects']:
                                 st.markdown(f"- {defect}")
 
                         # Repairs required
-                        if repairs:
+                        if 'repairs_required' in ai_result and ai_result['repairs_required']:
                             st.markdown("#### 🔧 Repairs Required")
-                            for i, repair in enumerate(repairs, 1):
+                            for i, repair in enumerate(ai_result['repairs_required'], 1):
                                 st.markdown(f"{i}. {repair}")
 
                         # Additional details
