@@ -132,9 +132,11 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
 
         # Try to upload using Snowpark
         try:
-            # Ensure temp stage exists
+            # Ensure temp stage exists WITHOUT client-side encryption
+            # Client-side encryption is not supported by AI_COMPLETE TO_FILE
             session.sql(f"""
                 CREATE STAGE IF NOT EXISTS {TEMP_STAGE_NAME}
+                ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')
                 DIRECTORY = (ENABLE = TRUE)
             """).collect()
 
