@@ -37,45 +37,6 @@ AVAILABLE_MODELS = {
 DEFAULT_PROMPT = """Describe the key characteristics of this wall as seen in this image {0}, noting this is part of a building. Keep descriptions concise and focus on structural defects. Respond in JSON with fields: material, colour, distinguishing_features, is_cracked, is_defective, defect_severity, defects, repairs_required, estimated_time_repairs_required, confidence_level_on_material, estimated_cost_of_repairs"""
 
 
-def validate_image(uploaded_file, model_name):
-    """Validate image format, size, and resolution"""
-    # Check format
-    file_ext = uploaded_file.name.split('.')[-1].lower()
-    if f'.{file_ext}' not in SUPPORTED_FORMATS:
-        return False, f"❌ Unsupported format. Supported: {', '.join(SUPPORTED_FORMATS)}"
-    
-    # Check size
-    file_size_mb = uploaded_file.size / (1024 * 1024)
-    is_claude = model_name in CLAUDE_MODELS
-    max_size = MAX_SIZE_MB_CLAUDE if is_claude else MAX_SIZE_MB_GENERAL
-    
-    if file_size_mb > max_size:
-        return False, f"❌ File too large ({file_size_mb:.2f} MB). Max: {max_size} MB for {model_name}"
-    
-    # Check resolution for Claude models
-    if is_claude:
-        try:
-            image = Image.open(uploaded_file)
-            width, height = image.size
-            if width > MAX_RESOLUTION_CLAUDE or height > MAX_RESOLUTION_CLAUDE:
-                return False, f"❌ Resolution {width}x{height} exceeds Claude limit of {MAX_RESOLUTION_CLAUDE}x{MAX_RESOLUTION_CLAUDE}"
-            uploaded_file.seek(0)  # Reset file pointer
-        except Exception as e:
-            return False, f"❌ Could not read image: {str(e)}"
-    
-    return True, "✅ Validation passed"
-
-
-def sanitize_filename(filename: str) -> str:
-    """Remove special characters from filename"""
-    import re
-    name, ext = filename.rsplit('.', 1) if '.' in filename else (filename, '')
-    name = re.sub(r'[^\w\-]', '_', name)
-    name = re.sub(r'_+', '_', name)
-    name = name.strip('_')
-    return f"{name}.{ext}" if ext else name
-
-
 def analyze_with_snowflake(session, stage_name: str, file_path: str, prompt: str, model: str):
     """
     Analyze image using Snowflake AI_COMPLETE with PARSE_JSON wrapper
@@ -178,101 +139,75 @@ def main():
     
     # Main content
     col1, col2 = st.columns([1, 1])
-    
+
     with col1:
-        st.subheader("📤 Upload Image")
-        uploaded_file = st.file_uploader(
-            "Choose an image",
-            type=['jpg', 'jpeg', 'png', 'gif', 'webp'],
-            help="Upload a construction site image for defect analysis"
-        )
-        
-        if uploaded_file:
-            st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
-            
-            # Display image info
-            file_size_mb = uploaded_file.size / (1024 * 1024)
-            image = Image.open(uploaded_file)
-            width, height = image.size
-            uploaded_file.seek(0)
-            st.info(f"📊 **Size:** {file_size_mb:.2f} MB | **Resolution:** {width}x{height}px")
-    
+        st.subheader("📂 Select Image from Stage")
+
+        # Load available images from stage
+        selected_file = None
+        try:
+            files_query = f"""
+            SELECT
+                RELATIVE_PATH,
+                SIZE,
+                LAST_MODIFIED
+            FROM DIRECTORY(@{SNOWFLAKE_STAGE_NAME})
+            WHERE RELATIVE_PATH LIKE '%.jpg'
+               OR RELATIVE_PATH LIKE '%.jpeg'
+               OR RELATIVE_PATH LIKE '%.png'
+               OR RELATIVE_PATH LIKE '%.gif'
+               OR RELATIVE_PATH LIKE '%.webp'
+            ORDER BY LAST_MODIFIED DESC
+            LIMIT 100
+            """
+            files_df = session.sql(files_query).to_pandas()
+
+            if len(files_df) > 0:
+                # Create a selectbox with file names
+                selected_file = st.selectbox(
+                    "Choose an image from stage",
+                    options=files_df['RELATIVE_PATH'].tolist(),
+                    help="Select an image that has been uploaded to the Snowflake stage"
+                )
+
+                if selected_file:
+                    # Display file info
+                    file_info = files_df[files_df['RELATIVE_PATH'] == selected_file].iloc[0]
+                    file_size_mb = file_info['SIZE'] / (1024 * 1024)
+
+                    st.info(f"""
+                    📊 **File:** {selected_file}
+                    📏 **Size:** {file_size_mb:.2f} MB
+                    🕒 **Modified:** {file_info['LAST_MODIFIED']}
+                    """)
+
+                    st.success(f"✅ Selected: `{selected_file}`")
+            else:
+                st.warning("⚠️ No images found in stage. Please upload images to the stage first.")
+                st.info("""
+                **To upload images to the stage:**
+                1. Use SnowSQL: `PUT file://local/path/image.jpg @input_stage/images`
+                2. Or upload via Snowsight UI to the stage
+                3. Then refresh this page
+                """)
+
+        except Exception as e:
+            st.error(f"❌ Error loading files from stage: {str(e)}")
+
     with col2:
         st.subheader("🔍 Analysis Results")
-        
-        if uploaded_file:
+
+        if selected_file:
             if st.button("🚀 Analyze Image", type="primary", use_container_width=True):
-                # Validation
-                is_valid, validation_msg = validate_image(uploaded_file, model)
-                
-                if not is_valid:
-                    st.error(validation_msg)
-                    st.stop()
-                
                 # Progress tracking
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
-                # Step 1: Upload to Snowflake stage
-                status_text.text("⬆️ Uploading to Snowflake stage...")
-                progress_bar.progress(33)
-                
-                try:
-                    # Sanitize filename
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    sanitized_name = sanitize_filename(uploaded_file.name)
-                    file_path = f"images/{timestamp}_{sanitized_name}"
 
-                    # Read file bytes
-                    file_bytes = uploaded_file.read()
-                    uploaded_file.seek(0)
-
-                    # Write to temp location then upload using session.file.put()
-                    import tempfile
-                    import os
-
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{sanitized_name.split(".")[-1]}') as tmp_file:
-                        tmp_file.write(file_bytes)
-                        tmp_path = tmp_file.name
-
-                    try:
-                        # Use session.file.put() for Streamlit in Snowflake
-                        put_result = session.file.put(
-                            tmp_path,
-                            f"@{SNOWFLAKE_STAGE_NAME}/images",
-                            auto_compress=False,
-                            overwrite=True
-                        )
-
-                        # Clean up temp file
-                        os.unlink(tmp_path)
-
-                        # The uploaded file will have the original name
-                        file_path = f"images/{sanitized_name}"
-
-                        st.success(f"✅ Uploaded to stage: `{file_path}`")
-                        progress_bar.progress(66)
-
-                    except Exception as upload_err:
-                        if os.path.exists(tmp_path):
-                            os.unlink(tmp_path)
-                        raise upload_err
-
-                except Exception as e:
-                    st.error(f"❌ Upload error: {str(e)}")
-                    st.stop()
-                
-                # Step 2: Refresh stage
-                status_text.text("🔄 Refreshing stage...")
-                try:
-                    session.sql(f"ALTER STAGE {SNOWFLAKE_STAGE_NAME} REFRESH").collect()
-                except Exception as e:
-                    st.warning(f"⚠️ Stage refresh: {str(e)}")
-                
-                # Step 3: Analyze with AI
+                # Step 1: Analyze with AI (file already in stage)
                 status_text.text("🤖 Analyzing with Snowflake AI...")
-                
-                success, result = analyze_with_snowflake(session, SNOWFLAKE_STAGE_NAME, file_path, prompt, model)
+                progress_bar.progress(50)
+
+                success, result = analyze_with_snowflake(session, SNOWFLAKE_STAGE_NAME, selected_file, prompt, model)
                 
                 if not success:
                     st.error(result)
@@ -316,7 +251,7 @@ def main():
                         summary_data = {
                             "Model": [model],
                             "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                            "Image": [uploaded_file.name],
+                            "Image": [selected_file],
                             "Status": ["✅ Completed"]
                         }
                         
