@@ -134,8 +134,14 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
         try:
             # Ensure temp stage exists WITHOUT client-side encryption
             # Client-side encryption is not supported by AI_COMPLETE TO_FILE
+            # DROP and recreate to ensure correct encryption type
+            try:
+                session.sql(f"DROP STAGE IF EXISTS {TEMP_STAGE_NAME}").collect()
+            except:
+                pass  # Ignore if doesn't exist
+
             session.sql(f"""
-                CREATE STAGE IF NOT EXISTS {TEMP_STAGE_NAME}
+                CREATE STAGE {TEMP_STAGE_NAME}
                 ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')
                 DIRECTORY = (ENABLE = TRUE)
             """).collect()
