@@ -346,32 +346,78 @@ def main():
                     # Display AI result
                     st.json(ai_result)
 
-                    # Extract message content
+                    # Extract message content - handle both formats
+                    message_content = None
+
+                    # Format 1: OpenAI-style with choices array
                     if 'choices' in ai_result and len(ai_result['choices']) > 0:
                         message_content = ai_result['choices'][0].get('message', {}).get('content', '')
 
+                    # Format 2: Direct JSON response (Snowflake Cortex native)
+                    elif isinstance(ai_result, dict) and any(key in ai_result for key in ['material', 'defects', 'repairs_required']):
+                        # This is the structured defect analysis response
+                        st.markdown("### 📝 Defect Analysis Results")
+
+                        # Display key findings in columns
+                        result_cols = st.columns(3)
+                        with result_cols[0]:
+                            st.metric("Material", ai_result.get('material', 'N/A'))
+                            st.metric("Colour", ai_result.get('colour', 'N/A'))
+                        with result_cols[1]:
+                            st.metric("Defective", "Yes" if ai_result.get('is_defective') else "No")
+                            st.metric("Severity", ai_result.get('defect_severity', 'N/A').upper())
+                        with result_cols[2]:
+                            st.metric("Estimated Cost", ai_result.get('estimated_cost_of_repairs', 'N/A'))
+                            st.metric("Time Required", ai_result.get('estimated_time_repairs_required', 'N/A'))
+
+                        # Defects list
+                        if 'defects' in ai_result and ai_result['defects']:
+                            st.markdown("#### 🔍 Identified Defects")
+                            for defect in ai_result['defects']:
+                                st.markdown(f"- {defect}")
+
+                        # Repairs required
+                        if 'repairs_required' in ai_result and ai_result['repairs_required']:
+                            st.markdown("#### 🔧 Repairs Required")
+                            for i, repair in enumerate(ai_result['repairs_required'], 1):
+                                st.markdown(f"{i}. {repair}")
+
+                        # Additional details
+                        st.markdown("#### 📋 Additional Details")
+                        details_data = {
+                            "Cracked": ["Yes" if ai_result.get('is_cracked') else "No"],
+                            "Confidence Level": [ai_result.get('confidence_level_on_material', 'N/A')],
+                            "Features": [ai_result.get('distinguishing_features', 'N/A')]
+                        }
+                        df_details = pd.DataFrame(details_data)
+                        st.dataframe(df_details, use_container_width=True)
+
+                    # Format 3: Plain text content
+                    elif isinstance(ai_result, str):
+                        message_content = ai_result
+
+                    # Display message content if extracted
+                    if message_content:
                         st.markdown("### 📝 AI Response")
                         st.markdown(message_content)
 
-                        # Summary table
-                        st.markdown("### 📋 Summary Table")
-                        summary_data = {
-                            "Model": [model],
-                            "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                            "Image": [uploaded_file.name],
-                            "Status": ["✅ Completed"]
-                        }
+                    # Summary table
+                    st.markdown("### 📋 Summary Table")
+                    summary_data = {
+                        "Model": [model],
+                        "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+                        "Image": [uploaded_file.name],
+                        "Status": ["✅ Completed"]
+                    }
 
-                        # Add token usage if available
-                        if 'usage' in ai_result:
-                            summary_data["Total Tokens"] = [ai_result['usage'].get('total_tokens', 'N/A')]
-                            summary_data["Prompt Tokens"] = [ai_result['usage'].get('prompt_tokens', 'N/A')]
-                            summary_data["Completion Tokens"] = [ai_result['usage'].get('completion_tokens', 'N/A')]
+                    # Add token usage if available
+                    if 'usage' in ai_result:
+                        summary_data["Total Tokens"] = [ai_result['usage'].get('total_tokens', 'N/A')]
+                        summary_data["Prompt Tokens"] = [ai_result['usage'].get('prompt_tokens', 'N/A')]
+                        summary_data["Completion Tokens"] = [ai_result['usage'].get('completion_tokens', 'N/A')]
 
-                        df = pd.DataFrame(summary_data)
-                        st.dataframe(df, use_container_width=True)
-                    else:
-                        st.warning("⚠️ Unexpected response format")
+                    df = pd.DataFrame(summary_data)
+                    st.dataframe(df, use_container_width=True)
                 else:
                     st.error("❌ Invalid result format")
 
