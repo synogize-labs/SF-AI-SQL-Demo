@@ -331,21 +331,6 @@ def main():
                     ai_result = result.get('ai_result', {})
                     metadata = result.get('metadata', {})
 
-                    # Display metadata
-                    if metadata:
-                        st.markdown("### 📁 File Metadata")
-                        metadata_cols = st.columns(3)
-                        with metadata_cols[0]:
-                            st.metric("File Path", metadata.get('file_path', 'N/A'))
-                        with metadata_cols[1]:
-                            file_size_kb = metadata.get('file_size_bytes', 0) / 1024
-                            st.metric("File Size", f"{file_size_kb:.2f} KB")
-                        with metadata_cols[2]:
-                            st.metric("Last Modified", metadata.get('last_modified', 'N/A'))
-
-                    # Display AI result
-                    st.json(ai_result)
-
                     # Extract message content - handle both formats
                     message_content = None
 
@@ -357,11 +342,11 @@ def main():
                     elif isinstance(ai_result, dict) and any(key in ai_result for key in ['material', 'defects', 'repairs_required']):
                         # This is the structured defect analysis response
                         st.markdown("### 📝 Defect Analysis Results")
-
+                    
                         # Display key findings in columns
                         result_cols = st.columns(3)
                         with result_cols[0]:
-                            st.metric("Material", ai_result.get('material', 'N/A'))
+                            st.metric("Cracked", "Yes" if ai_result.get('is_cracked') else "No")
                             st.metric("Colour", ai_result.get('colour', 'N/A'))
                         with result_cols[1]:
                             st.metric("Defective", "Yes" if ai_result.get('is_defective') else "No")
@@ -370,22 +355,42 @@ def main():
                             st.metric("Estimated Cost", ai_result.get('estimated_cost_of_repairs', 'N/A'))
                             st.metric("Time Required", ai_result.get('estimated_time_repairs_required', 'N/A'))
 
+                        # Material 
+                        if 'material' in ai_result and ai_result['material']:
+                            st.markdown("#### 🪨 Material")
+                            st.write(ai_result.get('material', 'N/A'))
+                                
+                        # Distinguishing features 
+                        if 'distinguishing_features' in ai_result and ai_result['distinguishing_features']:
+                            st.markdown("#### 🔖 Material Analysis")
+                            if isinstance(ai_result['distinguishing_features'], list):
+                                for feature in ai_result['distinguishing_features']:
+                                    st.markdown(f"- {feature}")
+                            else:
+                                st.write(ai_result.get('distinguishing_features', 'N/A'))
+                        
                         # Defects list
                         if 'defects' in ai_result and ai_result['defects']:
                             st.markdown("#### 🔍 Identified Defects")
-                            for defect in ai_result['defects']:
-                                st.markdown(f"- {defect}")
+                            if isinstance(ai_result['defects'], list):
+                                for defect in ai_result['defects']:
+                                    st.markdown(f"- {defect}")
+                            else:
+                                st.write(ai_result.get('defects', 'N/A'))
 
                         # Repairs required
                         if 'repairs_required' in ai_result and ai_result['repairs_required']:
                             st.markdown("#### 🔧 Repairs Required")
-                            for i, repair in enumerate(ai_result['repairs_required'], 1):
-                                st.markdown(f"{i}. {repair}")
+                            if isinstance(ai_result['repairs_required'], list):
+                                for i, repair in enumerate(ai_result['repairs_required'], 1):
+                                    st.markdown(f"{i}. {repair}")
+                            else:
+                                st.write(ai_result.get('repairs_required', 'N/A'))
+
 
                         # Additional details
                         st.markdown("#### 📋 Additional Details")
                         details_data = {
-                            "Cracked": ["Yes" if ai_result.get('is_cracked') else "No"],
                             "Confidence Level": [ai_result.get('confidence_level_on_material', 'N/A')],
                             "Features": [ai_result.get('distinguishing_features', 'N/A')]
                         }
@@ -400,6 +405,21 @@ def main():
                     if message_content:
                         st.markdown("### 📝 AI Response")
                         st.markdown(message_content)
+
+                    # Display metadata
+                    if metadata:
+                        st.markdown("### 📁 File Metadata")
+                        metadata_cols = st.columns(3)
+                        with metadata_cols[0]:
+                            st.metric("File Path", metadata.get('file_path', 'N/A'))
+                        with metadata_cols[1]:
+                            file_size_kb = metadata.get('file_size_bytes', 0) / 1024
+                            st.metric("File Size", f"{file_size_kb:.2f} KB")
+                        with metadata_cols[2]:
+                            st.metric("Last Modified", metadata.get('last_modified', 'N/A'))
+
+                    # Display AI result
+                    st.json(ai_result, expanded=False)
 
                     # Summary table
                     st.markdown("### 📋 Summary Table")
