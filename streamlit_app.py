@@ -171,47 +171,107 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
 
         # Escape single quotes in prompt
         escaped_prompt = prompt.replace("'", "''")
+        escaped_filename = filename.replace("'", "''")
 
-        # Analyze using AI_COMPLETE
+        # Ensure AI_IMAGE_RUN_LOG table exists
+        try:
+            session.sql("""
+                CREATE TABLE IF NOT EXISTS AI_IMAGE_RUN_LOG (
+                  run_id              STRING      DEFAULT UUID_STRING(),
+                  run_ts              TIMESTAMP   DEFAULT CURRENT_TIMESTAMP(),
+                  user_name           STRING      DEFAULT CURRENT_USER(),
+                  stage_name          STRING,
+                  image_name          STRING,
+                  model_name          STRING,
+                  content_type        STRING,
+                  file_size_bytes     NUMBER,
+                  last_modified       TIMESTAMP,
+                  container_relpath   STRING,
+                  ai_calls            VARIANT,
+                  result_json         VARIANT
+                )
+            """).collect()
+        except:
+            pass  # Table might already exist
+
+        # Analyze using AI_COMPLETE and INSERT into log table
         query = f"""
+        INSERT INTO AI_IMAGE_RUN_LOG (
+          run_ts, user_name,
+          stage_name, image_name, model_name,
+          content_type, file_size_bytes, last_modified, container_relpath,
+          ai_calls, result_json
+        )
         WITH input_pics AS (
             SELECT
-                TO_FILE('@{TEMP_STAGE_NAME}', '{stage_file_path}') AS img,
-                '{filename}' AS container_relpath,
-                {len(file_bytes)} AS file_size_bytes,
-                CURRENT_TIMESTAMP() AS last_modified
+                '@{TEMP_STAGE_NAME}'                    AS stage_name,
+                '{escaped_filename}'                    AS image_name,
+                '{model}'                               AS model_name,
+                '{escaped_prompt}'                      AS ai_complete_prompt_tmpl,
+                d.RELATIVE_PATH                         AS container_relpath,
+                d.SIZE                                  AS file_size_bytes,
+                TO_TIMESTAMP_NTZ(d.LAST_MODIFIED)       AS last_modified,
+                TO_FILE('@{TEMP_STAGE_NAME}', '{stage_file_path}') AS img
+            FROM DIRECTORY('@{TEMP_STAGE_NAME}') d
+            WHERE d.RELATIVE_PATH = '{stage_file_path}'
+            LIMIT 1
         ),
-        ai_analysis AS (
+        classify_pics AS (
             SELECT
-                container_relpath,
-                file_size_bytes,
-                last_modified,
+                *,
+                ARRAY_CONSTRUCT(img)[0]['CONTENT_TYPE'] AS content_type,
+                OBJECT_CONSTRUCT(
+                  'ai_complete', OBJECT_CONSTRUCT(
+                    'prompt', ai_complete_prompt_tmpl,
+                    'model',  model_name
+                  )
+                ) AS ai_calls
+            FROM input_pics
+        ),
+        assembled AS (
+            SELECT
+                *,
+                CURRENT_TIMESTAMP()                     AS run_ts,
+                CURRENT_USER()                          AS user_name,
                 PARSE_JSON(
                     AI_COMPLETE(
                         model => '{model}',
-                        prompt => PROMPT('{escaped_prompt}', img)
+                        prompt => PROMPT(ai_complete_prompt_tmpl, img)
                     )
                 ) AS result_json
-            FROM input_pics
+            FROM classify_pics
         )
         SELECT
-            container_relpath,
-            file_size_bytes,
-            last_modified,
-            result_json
-        FROM ai_analysis;
+          run_ts, user_name,
+          stage_name, image_name, model_name,
+          content_type, file_size_bytes, last_modified, container_relpath,
+          ai_calls, result_json
+        FROM assembled;
         """
 
-        result = session.sql(query).collect()
+        insert_result = session.sql(query).collect()
+
+        # Fetch the latest log entry for this analysis
+        fetch_query = """
+        SELECT *
+        FROM AI_IMAGE_RUN_LOG
+        ORDER BY run_ts DESC
+        LIMIT 1;
+        """
+
+        result = session.sql(fetch_query).collect()
 
         if result and len(result) > 0:
             row = result[0]
             return True, {
                 "ai_result": json.loads(row['RESULT_JSON']) if isinstance(row['RESULT_JSON'], str) else row['RESULT_JSON'],
                 "metadata": {
+                    "run_id": row['RUN_ID'],
                     "file_path": row['CONTAINER_RELPATH'],
                     "file_size_bytes": row['FILE_SIZE_BYTES'],
-                    "last_modified": str(row['LAST_MODIFIED']) if row['LAST_MODIFIED'] else None
+                    "last_modified": str(row['LAST_MODIFIED']) if row['LAST_MODIFIED'] else None,
+                    "user_name": row['USER_NAME'],
+                    "run_ts": str(row['RUN_TS']) if row['RUN_TS'] else None
                 }
             }
         else:
@@ -421,14 +481,19 @@ def main():
                         st.markdown("**📝 AI Response**")
                         st.markdown(message_content)
 
-                    # Summary table
+                    # Summary table with run log info
                     st.markdown("**📊 Summary**")
                     summary_data = {
                         "Model": [model],
-                        "Time": [datetime.now().strftime("%H:%M:%S")],
+                        "Time": [metadata.get('run_ts', datetime.now().strftime("%H:%M:%S"))[:19] if metadata.get('run_ts') else datetime.now().strftime("%H:%M:%S")],
                         "Image": [uploaded_file.name],
+                        "User": [metadata.get('user_name', 'N/A')],
                         "Status": ["✅ Complete"]
                     }
+
+                    # Add run_id if available
+                    if metadata and metadata.get('run_id'):
+                        st.caption(f"🔑 Run ID: `{metadata.get('run_id')}`")
 
                     # Add token usage if available
                     if 'usage' in ai_result:
@@ -437,9 +502,19 @@ def main():
                     df = pd.DataFrame(summary_data)
                     st.dataframe(df, use_container_width=True, hide_index=True)
 
-                    # Collapsible raw JSON
+                    # Collapsible sections
                     with st.expander("📄 View Raw JSON"):
                         st.json(ai_result)
+
+                    with st.expander("📋 View Log Entry"):
+                        st.json({
+                            "run_id": metadata.get('run_id'),
+                            "run_ts": metadata.get('run_ts'),
+                            "user_name": metadata.get('user_name'),
+                            "file_path": metadata.get('file_path'),
+                            "file_size_bytes": metadata.get('file_size_bytes'),
+                            "last_modified": metadata.get('last_modified')
+                        })
                         
                 else:
                     st.error("❌ Invalid result format")
