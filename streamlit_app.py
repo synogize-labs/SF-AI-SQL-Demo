@@ -235,10 +235,43 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
                 CURRENT_USER()                          AS user_name,
                 PARSE_JSON(
                     AI_COMPLETE(
-                        model => '{model}',
-                        prompt => PROMPT(ai_complete_prompt_tmpl, img)
-                    )
-                ) AS result_json
+                            model => '{model}',
+                            prompt => PROMPT(ai_complete_prompt_tmpl, img),
+                            response_format => {{
+                                'type':'json',
+                                'schema':{{
+                                    'type':'object',
+                                    'properties':{{
+                                        'material':{{'type':'string'}}, 
+                                        'colour':{{'type':'string'}}, 
+                                        'distinguishing_features':{{'type':'string'}}, 
+                                        'is_cracked':{{'type':'string'}},  
+                                        'is_defective':{{'type':'string'}}, 
+                                        'defect_severity':{{'type':'string'}}, 
+                                        'defects':{{'type':'string'}}, 
+                                        'repairs_required':{{'type':'string'}}, 
+                                        'estimated_time_repairs_required':{{'type':'string'}}, 
+                                        'confidence_level_on_material':{{'type':'string'}}, 
+                                        'estimated_cost_of_repairs':{{'type':'string'}}
+                                    }},
+                                    'required':['material',
+                                                'colour',
+                                                'distinguishing_features',
+                                                'is_cracked',
+                                                'is_defective',
+                                                'defect_severity',
+                                                'defects',
+                                                'repairs_required',
+                                                'estimated_time_repairs_required',
+                                                'confidence_level_on_material',
+                                                'estimated_cost_of_repairs'
+                                                ],
+                                    'additionalProperties':false
+                                }}
+                            }},
+                            show_details => true
+                            )
+                    ) AS result_json
             FROM classify_pics
         )
         SELECT
@@ -440,37 +473,35 @@ def main():
                         # Display key findings in columns
                         result_cols = st.columns(3)
                         with result_cols[0]:
-                            st.metric("Material", ai_result.get('material', 'N/A'))
-                            st.metric("Colour", ai_result.get('colour', 'N/A'))
+                            st.metric("Cracked", "Yes" if ai_result.get('is_cracked') else "No")
+                            st.metric("Repair", "No" if ai_result.get('repairs_required', 'N/A').lower() in ('none','n/a') else "Yes")
                         with result_cols[1]:
                             st.metric("Defective", "Yes" if ai_result.get('is_defective') else "No")
-                            st.metric("Severity", ai_result.get('defect_severity', 'N/A').upper())
-                        with result_cols[2]:
-                            st.metric("Cost", ai_result.get('estimated_cost_of_repairs', 'N/A'))
                             st.metric("Time", ai_result.get('estimated_time_repairs_required', 'N/A'))
+                        with result_cols[2]:
+                            st.metric("Severity", ai_result.get('defect_severity', 'N/A').upper())
+                            st.metric("Cost", ai_result.get('estimated_cost_of_repairs', 'N/A'),width='content')
 
+                        # Material 
+                        if ai_result['material']:
+                            st.markdown("**🧱 Material**")
+                            st.markdown(ai_result.get('material','N/A').capitalize())
+                            st.markdown(ai_result.get('colour','N/A').capitalize())
+                            st.markdown(ai_result.get('distinguishing_features','N/A').capitalize())
+                                
                         # Defects list
                         if defects:
                             st.markdown("**🔍 Identified Defects**")
                             for defect in defects:
-                                st.markdown(f"• {defect}")
+                                st.markdown(f"• {defect.capitalize()}")
 
                         # Repairs required
                         if repairs:
                             st.markdown("**🔧 Repairs Required**")
                             for i, repair in enumerate(repairs, 1):
-                                st.markdown(f"{i}. {repair}")
+                                st.markdown(f"{i}. {repair.capitalize()}")
+                            st.markdown(f"Time estimate: {ai_result.get('estimated_time_repairs_required', 'N/A')}")
 
-                        # Additional details in compact format
-                        st.markdown("**📋 Details**")
-                        details_info = f"""
-                        <div style='font-size: 0.9rem; line-height: 1.4;'>
-                        <b>Features:</b> {ai_result.get('distinguishing_features', 'N/A')}<br/>
-                        <b>Cracked:</b> {'Yes' if ai_result.get('is_cracked') else 'No'} |
-                        <b>Confidence:</b> {ai_result.get('confidence_level_on_material', 'N/A')}
-                        </div>
-                        """
-                        st.markdown(details_info, unsafe_allow_html=True)
 
                     # Format 3: Plain text content
                     elif isinstance(ai_result, str):
@@ -485,6 +516,7 @@ def main():
                     st.markdown("**📊 Summary**")
                     summary_data = {
                         "Model": [model],
+                        "Confidence": ai_result.get('confidence_level_on_material', 'N/A'),
                         "Time": [metadata.get('run_ts', datetime.now().strftime("%H:%M:%S"))[:19] if metadata.get('run_ts') else datetime.now().strftime("%H:%M:%S")],
                         "Image": [uploaded_file.name],
                         "User": [metadata.get('user_name', 'N/A')],
