@@ -391,8 +391,11 @@ def main():
                         # Additional details
                         st.markdown("#### 📋 Additional Details")
                         details_data = {
-                            "Confidence Level": [ai_result.get('confidence_level_on_material', 'N/A')],
-                            "Features": [ai_result.get('distinguishing_features', 'N/A')]
+                            "Model": [model],
+                            "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+                            "Image": [uploaded_file.name],
+                            "Status": ["✅ Completed"],
+                            "Confidence Level": [ai_result.get('confidence_level_on_material', 'N/A')]
                         }
                         df_details = pd.DataFrame(details_data)
                         st.dataframe(df_details, use_container_width=True)
@@ -421,23 +424,17 @@ def main():
                     # Display AI result
                     st.json(ai_result, expanded=False)
 
-                    # Summary table
-                    st.markdown("### 📋 Summary Table")
-                    summary_data = {
-                        "Model": [model],
-                        "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                        "Image": [uploaded_file.name],
-                        "Status": ["✅ Completed"]
-                    }
-
                     # Add token usage if available
                     if 'usage' in ai_result:
-                        summary_data["Total Tokens"] = [ai_result['usage'].get('total_tokens', 'N/A')]
-                        summary_data["Prompt Tokens"] = [ai_result['usage'].get('prompt_tokens', 'N/A')]
-                        summary_data["Completion Tokens"] = [ai_result['usage'].get('completion_tokens', 'N/A')]
-
-                    df = pd.DataFrame(summary_data)
-                    st.dataframe(df, use_container_width=True)
+                        st.markdown("#### 💸 Usage")
+                        usage_data = {
+                            "Total Tokens": [ai_result['usage'].get('total_tokens', 'N/A')],
+                            "Prompt Tokens": [ai_result['usage'].get('prompt_tokens', 'N/A')],
+                            "Completion Tokens": [ai_result['usage'].get('completion_tokens', 'N/A')]
+                        }
+                        df_usage_data = pd.DataFrame(usage_data)
+                        st.dataframe(df_usage_data, use_container_width=True)
+                        
                 else:
                     st.error("❌ Invalid result format")
 
