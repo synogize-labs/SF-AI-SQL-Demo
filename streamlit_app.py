@@ -228,46 +228,66 @@ def main():
         layout="wide"
     )
 
-    st.title("🏗️ Construction Defect Analysis - AI Image Processing")
-    st.markdown("Upload construction site images for AI-powered defect detection using Snowflake Cortex")
+    # Custom CSS for compact layout
+    st.markdown("""
+        <style>
+        .stApp { font-size: 14px; }
+        h1 { font-size: 1.8rem !important; margin-bottom: 0.5rem !important; }
+        h2 { font-size: 1.3rem !important; margin-top: 0.5rem !important; margin-bottom: 0.3rem !important; }
+        h3 { font-size: 1.1rem !important; margin-top: 0.5rem !important; margin-bottom: 0.3rem !important; }
+        h4 { font-size: 1rem !important; margin-top: 0.3rem !important; margin-bottom: 0.2rem !important; }
+        .stMarkdown { margin-bottom: 0.5rem !important; }
+        .stMetric { font-size: 0.9rem !important; }
+        .stMetric label { font-size: 0.85rem !important; }
+        .stMetric [data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.title("🏗️ Construction Defect Analysis")
+    st.caption("Upload construction site images for AI-powered defect detection using Snowflake Cortex")
 
     # Get Snowflake session
     session = get_active_session()
 
     # Sidebar - Configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.markdown("### ⚙️ Configuration")
 
         # Model selection by category
-        model_category = st.selectbox("Model Provider", list(AVAILABLE_MODELS.keys()))
-        model = st.selectbox("Select Model", AVAILABLE_MODELS[model_category])
+        st.markdown("**Model Selection**")
+        model_category = st.selectbox("Provider", list(AVAILABLE_MODELS.keys()), label_visibility="collapsed")
+        model = st.selectbox("Model", AVAILABLE_MODELS[model_category], label_visibility="collapsed")
 
         st.markdown("---")
-        st.subheader("📋 Analysis Prompt")
+        st.markdown("### 📋 Prompt")
         prompt = st.text_area(
             "Prompt Template",
             value=DEFAULT_PROMPT,
-            height=200,
-            help="Use {0} as placeholder for the image"
+            height=150,
+            help="Use {0} as placeholder for the image",
+            label_visibility="collapsed"
         )
 
         st.markdown("---")
-        st.info(f"""
-        **Limits:**
-        - Max size: {MAX_SIZE_MB_CLAUDE if model in CLAUDE_MODELS else MAX_SIZE_MB_GENERAL} MB
-        - Formats: {', '.join(SUPPORTED_FORMATS)}
-        {'- Max resolution: 8000x8000 (Claude)' if model in CLAUDE_MODELS else ''}
-        """)
+        st.markdown(f"""
+        <div style='font-size: 0.85rem;'>
+        <b>Limits:</b><br/>
+        • Max: {MAX_SIZE_MB_CLAUDE if model in CLAUDE_MODELS else MAX_SIZE_MB_GENERAL} MB<br/>
+        • Formats: {', '.join([f.replace('.', '') for f in SUPPORTED_FORMATS])}<br/>
+        {'• Resolution: 8000x8000 (Claude)' if model in CLAUDE_MODELS else ''}
+        </div>
+        """, unsafe_allow_html=True)
 
     # Main content
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("📤 Upload Image")
+        st.markdown("### 📤 Upload Image")
         uploaded_file = st.file_uploader(
             "Choose an image",
             type=['jpg', 'jpeg', 'png', 'gif', 'webp'],
-            help="Upload a construction site image for defect analysis"
+            help="Upload a construction site image for defect analysis",
+            label_visibility="collapsed"
         )
 
         if uploaded_file:
@@ -278,10 +298,10 @@ def main():
             image = Image.open(uploaded_file)
             width, height = image.size
             uploaded_file.seek(0)
-            st.info(f"📊 **Size:** {file_size_mb:.2f} MB | **Resolution:** {width}x{height}px")
+            st.markdown(f"<div style='font-size: 0.85rem;'>📊 Size: {file_size_mb:.2f} MB | Resolution: {width}x{height}px</div>", unsafe_allow_html=True)
 
     with col2:
-        st.subheader("🔍 Analysis Results")
+        st.markdown("### 🔍 Analysis Results")
 
         if uploaded_file:
             if st.button("🚀 Analyze Image", type="primary", use_container_width=True):
@@ -325,7 +345,6 @@ def main():
 
                 # Display results
                 st.markdown("---")
-                st.markdown("### 📊 Analysis Output")
 
                 if isinstance(result, dict):
                     ai_result = result.get('ai_result', {})
@@ -340,65 +359,58 @@ def main():
 
                     # Format 2: Direct JSON response (Snowflake Cortex native)
                     elif isinstance(ai_result, dict) and any(key in ai_result for key in ['material', 'defects', 'repairs_required']):
-                        # This is the structured defect analysis response
-                        st.markdown("### 📝 Defect Analysis Results")
-                    
+                        # Normalize defects and repairs to always be lists
+                        def ensure_list(value):
+                            """Convert value to list if it's not already"""
+                            if value is None:
+                                return []
+                            if isinstance(value, list):
+                                return value
+                            if isinstance(value, dict):
+                                # Handle dict with numeric keys like {0: "item1", 1: "item2"}
+                                return [v for k, v in sorted(value.items())]
+                            if isinstance(value, str):
+                                # Single string - wrap in list
+                                return [value]
+                            return []
+
+                        defects = ensure_list(ai_result.get('defects'))
+                        repairs = ensure_list(ai_result.get('repairs_required'))
+
                         # Display key findings in columns
                         result_cols = st.columns(3)
                         with result_cols[0]:
-                            st.metric("Cracked", "Yes" if ai_result.get('is_cracked') else "No")
+                            st.metric("Material", ai_result.get('material', 'N/A'))
                             st.metric("Colour", ai_result.get('colour', 'N/A'))
                         with result_cols[1]:
                             st.metric("Defective", "Yes" if ai_result.get('is_defective') else "No")
                             st.metric("Severity", ai_result.get('defect_severity', 'N/A').upper())
                         with result_cols[2]:
-                            st.metric("Estimated Cost", ai_result.get('estimated_cost_of_repairs', 'N/A'))
-                            st.metric("Time Required", ai_result.get('estimated_time_repairs_required', 'N/A'))
+                            st.metric("Cost", ai_result.get('estimated_cost_of_repairs', 'N/A'))
+                            st.metric("Time", ai_result.get('estimated_time_repairs_required', 'N/A'))
 
-                        # Material 
-                        if 'material' in ai_result and ai_result['material']:
-                            st.markdown("#### 🪨 Material")
-                            st.write(ai_result.get('material', 'N/A'))
-                                
-                        # Distinguishing features 
-                        if 'distinguishing_features' in ai_result and ai_result['distinguishing_features']:
-                            st.markdown("#### 🔖 Material Analysis")
-                            if isinstance(ai_result['distinguishing_features'], list):
-                                for feature in ai_result['distinguishing_features']:
-                                    st.markdown(f"- {feature}")
-                            else:
-                                st.write(ai_result.get('distinguishing_features', 'N/A'))
-                        
                         # Defects list
-                        if 'defects' in ai_result and ai_result['defects']:
-                            st.markdown("#### 🔍 Identified Defects")
-                            if isinstance(ai_result['defects'], list):
-                                for defect in ai_result['defects']:
-                                    st.markdown(f"- {defect}")
-                            else:
-                                st.write(ai_result.get('defects', 'N/A'))
+                        if defects:
+                            st.markdown("**🔍 Identified Defects**")
+                            for defect in defects:
+                                st.markdown(f"• {defect}")
 
                         # Repairs required
-                        if 'repairs_required' in ai_result and ai_result['repairs_required']:
-                            st.markdown("#### 🔧 Repairs Required")
-                            if isinstance(ai_result['repairs_required'], list):
-                                for i, repair in enumerate(ai_result['repairs_required'], 1):
-                                    st.markdown(f"{i}. {repair}")
-                            else:
-                                st.write(ai_result.get('repairs_required', 'N/A'))
+                        if repairs:
+                            st.markdown("**🔧 Repairs Required**")
+                            for i, repair in enumerate(repairs, 1):
+                                st.markdown(f"{i}. {repair}")
 
-
-                        # Additional details
-                        st.markdown("#### 📋 Additional Details")
-                        details_data = {
-                            "Model": [model],
-                            "Timestamp": [datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                            "Image": [uploaded_file.name],
-                            "Status": ["✅ Completed"],
-                            "Confidence Level": [ai_result.get('confidence_level_on_material', 'N/A')]
-                        }
-                        df_details = pd.DataFrame(details_data)
-                        st.dataframe(df_details, use_container_width=True)
+                        # Additional details in compact format
+                        st.markdown("**📋 Details**")
+                        details_info = f"""
+                        <div style='font-size: 0.9rem; line-height: 1.4;'>
+                        <b>Features:</b> {ai_result.get('distinguishing_features', 'N/A')}<br/>
+                        <b>Cracked:</b> {'Yes' if ai_result.get('is_cracked') else 'No'} |
+                        <b>Confidence:</b> {ai_result.get('confidence_level_on_material', 'N/A')}
+                        </div>
+                        """
+                        st.markdown(details_info, unsafe_allow_html=True)
 
                     # Format 3: Plain text content
                     elif isinstance(ai_result, str):
@@ -406,34 +418,28 @@ def main():
 
                     # Display message content if extracted
                     if message_content:
-                        st.markdown("### 📝 AI Response")
+                        st.markdown("**📝 AI Response**")
                         st.markdown(message_content)
 
-                    # Display metadata
-                    if metadata:
-                        st.markdown("### 📁 File Metadata")
-                        metadata_cols = st.columns(3)
-                        with metadata_cols[0]:
-                            st.metric("File Path", metadata.get('file_path', 'N/A'))
-                        with metadata_cols[1]:
-                            file_size_kb = metadata.get('file_size_bytes', 0) / 1024
-                            st.metric("File Size", f"{file_size_kb:.2f} KB")
-                        with metadata_cols[2]:
-                            st.metric("Last Modified", metadata.get('last_modified', 'N/A'))
-
-                    # Display AI result
-                    st.json(ai_result, expanded=False)
+                    # Summary table
+                    st.markdown("**📊 Summary**")
+                    summary_data = {
+                        "Model": [model],
+                        "Time": [datetime.now().strftime("%H:%M:%S")],
+                        "Image": [uploaded_file.name],
+                        "Status": ["✅ Complete"]
+                    }
 
                     # Add token usage if available
                     if 'usage' in ai_result:
-                        st.markdown("#### 💸 Usage")
-                        usage_data = {
-                            "Total Tokens": [ai_result['usage'].get('total_tokens', 'N/A')],
-                            "Prompt Tokens": [ai_result['usage'].get('prompt_tokens', 'N/A')],
-                            "Completion Tokens": [ai_result['usage'].get('completion_tokens', 'N/A')]
-                        }
-                        df_usage_data = pd.DataFrame(usage_data)
-                        st.dataframe(df_usage_data, use_container_width=True)
+                        summary_data["Tokens"] = [f"{ai_result['usage'].get('total_tokens', 'N/A')}"]
+
+                    df = pd.DataFrame(summary_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+
+                    # Collapsible raw JSON
+                    with st.expander("📄 View Raw JSON"):
+                        st.json(ai_result)
                         
                 else:
                     st.error("❌ Invalid result format")
