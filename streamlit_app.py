@@ -454,9 +454,9 @@ def main():
                     elif isinstance(ai_result, dict) and any(key in ai_result for key in ['material', 'defects', 'repairs_required']):
                         # Normalize defects and repairs to always be lists
                         def ensure_list(value):
-                            """Convert value to list if it's not already"""
+                            """Convert value to list if it's not already. Prevents an empty list from being returned"""
                             if value is None:
-                                return []
+                                return ['none']
                             if isinstance(value, list):
                                 return value
                             if isinstance(value, dict):
@@ -465,7 +465,7 @@ def main():
                             if isinstance(value, str):
                                 # Single string - wrap in list
                                 return [value]
-                            return []
+                            return ['none']
 
                         defects = ensure_list(ai_result.get('defects'))
                         repairs = ensure_list(ai_result.get('repairs_required'))
