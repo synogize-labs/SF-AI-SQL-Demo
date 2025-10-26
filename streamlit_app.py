@@ -474,7 +474,7 @@ def main():
                         result_cols = st.columns(3)
                         with result_cols[0]:
                             st.metric("Cracked", "Yes" if ai_result.get('is_cracked') else "No")
-                            st.metric("Repair", "No" if ai_result.get('repairs_required', 'N/A').lower() in ('none','n/a') else "Yes")
+                            st.metric("Repair", "No" if repairs[0].lower() in ('none','n/a') else "Yes")
                         with result_cols[1]:
                             st.metric("Defective", "Yes" if ai_result.get('is_defective') else "No")
                             st.metric("Time", ai_result.get('estimated_time_repairs_required', 'N/A'))
