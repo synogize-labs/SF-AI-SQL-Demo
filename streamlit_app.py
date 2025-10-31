@@ -176,23 +176,26 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
         # Ensure AI_IMAGE_RUN_LOG table exists
         try:
             session.sql("""
-                CREATE TABLE IF NOT EXISTS AI_IMAGE_RUN_LOG (
-                  run_id              STRING      DEFAULT UUID_STRING(),
-                  run_ts              TIMESTAMP   DEFAULT CURRENT_TIMESTAMP(),
-                  user_name           STRING      DEFAULT CURRENT_USER(),
-                  stage_name          STRING,
-                  image_name          STRING,
-                  model_name          STRING,
-                  content_type        STRING,
-                  file_size_bytes     NUMBER,
-                  last_modified       TIMESTAMP,
-                  container_relpath   STRING,
-                  ai_calls            VARIANT,
-                  result_json         VARIANT
+                CREATE OR ALTER TABLE AI_IMAGE_RUN_LOG (
+                run_id              STRING      DEFAULT UUID_STRING(),
+                run_ts              TIMESTAMP   DEFAULT CURRENT_TIMESTAMP(),
+                user_name           STRING      DEFAULT CURRENT_USER(),
+                stage_name          STRING,
+                image_name          STRING,
+                model_name          STRING,
+                content_type        STRING,
+                file_size_bytes     NUMBER,
+                last_modified       TIMESTAMP,
+                container_relpath   STRING,
+                ai_calls            VARIANT,
+                result_json         VARIANT,
+                completion_tokens   NUMBER,
+                prompt_tokens       NUMBER,
+                total_tokens        NUMBER
                 )
             """).collect()
-        except:
-            pass  # Table might already exist
+        except Exception as table_err:
+            raise Exception(f"Log table creation error: {str(table_err)}")
 
         # Analyze using AI_COMPLETE and INSERT into log table
         query = f"""
@@ -200,7 +203,8 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
           run_ts, user_name,
           stage_name, image_name, model_name,
           content_type, file_size_bytes, last_modified, container_relpath,
-          ai_calls, result_json
+          ai_calls, result_json,
+          completion_tokens,prompt_tokens,total_tokens
         )
         WITH input_pics AS (
             SELECT
@@ -271,14 +275,18 @@ def analyze_with_uploaded_file(session, file_bytes, filename, prompt, model):
                             }},
                             show_details => true
                             )
-                    ) AS result_json
+                    ) AS result_json,
+                result_json:usage:completion_tokens   AS completion_tokens,
+                result_json:usage:prompt_tokens       AS prompt_tokens,
+                result_json:usage:total_tokens        AS total_tokens
             FROM classify_pics
         )
         SELECT
           run_ts, user_name,
           stage_name, image_name, model_name,
           content_type, file_size_bytes, last_modified, container_relpath,
-          ai_calls, result_json
+          ai_calls, result_json,
+          completion_tokens,prompt_tokens,total_tokens
         FROM assembled;
         """
 
